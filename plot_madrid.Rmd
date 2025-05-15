@@ -1,0 +1,106 @@
+---
+title: "Map Madrid"
+author: "Yara Roelen"
+date: "2025-05-04"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(sf)
+library(raster)
+library(geodata)
+library(leaflet)
+library(dplyr)
+library(RColorBrewer)
+```
+
+# reading the data into R
+```{r}
+data_stations = read.csv("C:/users/yarar/downloads/unzipped/stations.csv")
+
+data_2018 = read.csv("C:/users/yarar/downloads/unzipped/csvs_per_year/csvs_per_year/madrid_2018.csv")
+colnames(data_2018)[colnames(data_2018) == "station"] <- "id"
+
+# merge the stations and the pollution data by the id of the station
+merged_data_2018 <- merge(data_2018, data_stations, by = "id")
+
+merged_data_2018$nitrogen = merged_data_2018$NO + merged_data_2018$NO_2 + merged_data_2018$NOx
+
+head(merged_data_2018)
+  
+```
+# Average out the measured pollution levels
+```{r}
+library(dplyr)
+# the mean is taken for each station and each pollutant (the average measured value for each pollutant in each station measured in 2018)
+mean_per_station_per_group = merged_data_2018 %>% group_by(id, name, lon, lat) %>% dplyr::select(nitrogen, NO, NO_2, NOx, lon, lat, SO_2, CO) %>% summarize(mean_nitrogen_total = mean(nitrogen, na.rm=TRUE), mean_NO = mean(NO, na.rm=TRUE), mean_NO2 = mean(NO_2, na.rm=TRUE), mean_NOx = mean(NOx, na.rm = TRUE), mean_CO = mean(CO, na.rm=TRUE), mean_SO2 = mean(SO_2, na.rm=TRUE))
+
+# boolean is made to asses whether a value is within the safe range
+mean_per_station_per_group = mean_per_station_per_group %>%
+  mutate(safe_mean_NO2 = ifelse(mean_NO2 < 40, "Yes", "No"), safe_mean_CO = ifelse(mean_CO < 10, "Yes", "No"), safe_mean_SO2 = ifelse(mean_SO2 < 20, "Yes", "No"), safe_mean_NO = "no information", safe_mean_NOx = "no information", safe_mean_nitrogen_total = "no information")
+
+# city-wide averages are calculated (the average of a given pollutant over all the stations)
+total_average_NO2 <- mean(mean_per_station_per_group$mean_NO2, na.rm = TRUE)
+total_average_NO = mean(mean_per_station_per_group$mean_NO, na.rm = TRUE)
+total_average_NOx = mean(mean_per_station_per_group$mean_NOx, na.rm = TRUE)
+total_average_CO = mean(mean_per_station_per_group$mean_CO, na.rm = TRUE)
+total_average_SO2 = mean(mean_per_station_per_group$mean_SO2, na.rm = TRUE)
+
+mean_per_station_per_group$total_average_NO2 = total_average_NO2
+mean_per_station_per_group$total_average_NO = total_average_NO
+mean_per_station_per_group$total_average_NOx = total_average_NOx
+mean_per_station_per_group$total_average_CO = total_average_CO
+mean_per_station_per_group$total_average_SO2 = total_average_SO2
+        
+```
+
+
+```{r, warning = FALSE}
+# chose color palette
+pal = colorNumeric(palette =rev(brewer.pal(11, "RdYlGn")), 
+                   domain = mean_per_station_per_group$mean_NO2)
+
+m = leaflet(data = mean_per_station_per_group) %>%
+  addTiles() %>%  # Add openStreet as background
+  addCircleMarkers(
+    ~lon, ~lat,  # Use lon en lat from merged_data
+    radius = 15,  # Set the radius of the dots
+    color = "black", # add a black border
+    stroke = TRUE, 
+    fillColor = ~pal(mean_NO2),  # Color of the dit itself, dependent on the mean NO2 value
+    fillOpacity = 0.9,  
+    popup = ~paste(name, 
+                   "<br> NO2:", round(mean_NO2, 3), 
+                   "<br> NO2 city average", round(total_average_NO2, 3),
+                   "<br> NO2 within safe range:", safe_mean_NO2,
+                   "<br> NO:", round(mean_NO, 3),
+                   "<br> NO city average", round(total_average_NO, 3),
+                   "<br> NOx:", round(mean_NOx, 3),
+                   "<br> NOx city average", round(total_average_NOx, 3),
+                    ifelse(!is.na(mean_SO2),
+                      paste0(
+                        "<br> SO2: ", round(mean_SO2, 2),
+                        "<br> SO2 city average: ", round(total_average_SO2, 2)),
+                        ""),
+                  ifelse(!is.na(mean_CO),
+                    paste0(
+                      "<br> CO: ", round(mean_CO, 2),
+                      "<br> CO city average: ", round(total_average_CO, 2)),
+                      ""))
+                   
+  ) %>%
+  addLegend(
+    position = "bottomright",  
+    pal = pal,
+    values = ~mean_NO2,
+    title = "average NO2 in 2018 (µg/m³)",
+    labFormat = labelFormat(suffix = " µg/m³"),
+    opacity = 1
+  )
+# show plot
+m
+# safe the plot as an html file
+htmlwidgets::saveWidget(m, "C:\\Users\\yarar\\OneDrive\\Documenten\\PDF\\Universiteit\\1Ma Data Science\\Visualisation\\pollution_madrid_NO2.html")
+
+```
