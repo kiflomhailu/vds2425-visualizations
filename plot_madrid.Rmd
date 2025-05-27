@@ -40,6 +40,17 @@ mean_per_station_per_group = merged_data_2018 %>% group_by(id, name, lon, lat) %
 mean_per_station_per_group = mean_per_station_per_group %>%
   mutate(safe_mean_NO2 = ifelse(mean_NO2 < 40, "Yes", "No"), safe_mean_CO = ifelse(mean_CO < 10, "Yes", "No"), safe_mean_SO2 = ifelse(mean_SO2 < 20, "Yes", "No"), safe_mean_NO = "no information", safe_mean_NOx = "no information", safe_mean_nitrogen_total = "no information")
 
+mean_per_station_per_group$symbol <- ifelse(
+  mean_per_station_per_group$mean_NO2 < 30, "+",  # groen
+  ifelse(mean_per_station_per_group$mean_NO2 < 40, "O", "-")  # geel en rood
+)
+
+mean_per_station_per_group$category <- cut(
+  mean_per_station_per_group$mean_NO2,
+  breaks = c(-Inf, 25, 40, Inf),
+  labels = c("+ (low)", "O (moderate)", "- (higher then norm)")
+)
+
 # city-wide averages are calculated (the average of a given pollutant over all the stations)
 total_average_NO2 <- mean(mean_per_station_per_group$mean_NO2, na.rm = TRUE)
 total_average_NO = mean(mean_per_station_per_group$mean_NO, na.rm = TRUE)
@@ -61,6 +72,18 @@ mean_per_station_per_group$total_average_SO2 = total_average_SO2
 pal = colorNumeric(palette =rev(brewer.pal(11, "RdYlGn")), 
                    domain = mean_per_station_per_group$mean_NO2)
 
+pal_cat <- colorFactor(
+  palette = pal(c(20, 35, 50)),
+  domain = mean_per_station_per_group$category
+)
+
+my_labels <- function(type, cuts, p) {
+  symbols <- ifelse(cuts < 30, "(+)",
+             ifelse(cuts < 40, "(O)", "(-)"))
+  paste0(round(cuts, 1), " µg/m³ ", symbols)
+}
+
+
 m = leaflet(data = mean_per_station_per_group) %>%
   addTiles() %>%  # Add openStreet as background
   addCircleMarkers(
@@ -70,6 +93,8 @@ m = leaflet(data = mean_per_station_per_group) %>%
     stroke = TRUE, 
     fillColor = ~pal(mean_NO2),  # Color of the dit itself, dependent on the mean NO2 value
     fillOpacity = 0.9,  
+    label = ~symbol,
+    labelOptions = labelOptions(noHide = TRUE, direction = "center", textOnly = TRUE),
     popup = ~paste(name, 
                    "<br> NO2:", round(mean_NO2, 3), 
                    "<br> NO2 city average", round(total_average_NO2, 3),
@@ -95,9 +120,10 @@ m = leaflet(data = mean_per_station_per_group) %>%
     pal = pal,
     values = ~mean_NO2,
     title = "average NO2 in 2018 (µg/m³)",
-    labFormat = labelFormat(suffix = " µg/m³"),
+    #labFormat = labelFormat(suffix = " µg/m³"),
+    labFormat = my_labels,
     opacity = 1
-  )
+  ) 
 # show plot
 m
 # safe the plot as an html file
