@@ -50,6 +50,7 @@ all_station_averages = pd.concat(yearly_station_averages, ignore_index=True)
 
 # Calculate city-wide yearly averages
 city_wide_averages = all_station_averages.groupby('year')[pollutants].mean().reset_index()
+city_wide_averages.to_csv("city_wide_averages.csv", index=False)
 
 # Create the interactive plot
 fig = go.Figure()
