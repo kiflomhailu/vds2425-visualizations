@@ -1,0 +1,297 @@
+---
+title: "project visualisation"
+author: "Yara Roelen"
+date: "2025-05-04"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(rsconnect)
+library(ggplot2)
+library(ggmap)
+library(ggspatial)
+library(sf)
+library(raster)
+library(geodata)
+library(leaflet)
+library(dplyr)
+library(RColorBrewer)
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+library(corrplot)
+library(GGally)
+```
+# read the data from the different stations
+```{r}
+data_stations = read.csv("C:/users/yarar/downloads/unzipped/stations.csv")
+head(data_stations)
+data_stations = na.omit(data_stations)
+```
+# read the data of all the different years and paste them all under each other
+```{r}
+
+years <- 2001:2018
+
+
+base_path <- "C:/users/yarar/downloads/unzipped/csvs_per_year/csvs_per_year/"
+
+# read data and paste under each other
+all_data <- lapply(years, function(year) {
+  file_path <- paste0(base_path, "madrid_", year, ".csv")
+  df <- read.csv(file_path)
+  print(df)
+  df$year <- year  # add year as a column
+  return(df)
+}) %>% bind_rows()
+# the name of station is changed to id
+colnames(all_data)[colnames(all_data) == "station"] <- "id"
+# the data of the years is mergend with the data of the stations
+merged_all_data <- merge(all_data, data_stations, by = "id")
+
+```
+# summarize the data (take averages for each pollutant)
+```{r}
+averages_all_data = all_data %>% group_by(year) %>% summarize(mean_nitrogen = mean(NO_2, na.rm = TRUE))
+```
+
+
+# Missing values
+```{r}
+# number of missing values
+colSums(is.na(all_data))
+# total numbber of rows
+colSums(is.na(all_data)) + colSums(!is.na(all_data))
+
+# missing variables per year and per variable
+missing_stats_per_year_var <- all_data %>%
+  group_by(year) %>%
+  summarise(across(everything(), list(
+    missing = ~ sum(is.na(.)),
+    total = ~ n()
+  ))) %>%
+  pivot_longer(
+    cols = -year,
+    names_to = c("variable", "stat"),
+    names_pattern = "^(.*)_(missing|total)$"
+  ) %>%
+  pivot_wider(
+    names_from = stat,
+    values_from = value
+  ) %>%
+  mutate(percentage_missing = (missing / total) * 100)
+
+```
+# Missing values per station in 2018
+```{r}
+library(dplyr)
+library(tidyr)
+
+vars <- c("BEN", "CO", "EBE", "NO", "NOx", "NO_2", "O_3", "PM10", "PM25", "SO_2", "TCH", "TOL", "PXY", "MXY", "NMHC", "OXY", "CH4")
+
+missing_summary_2018 <- merged_all_data %>%
+  filter(year == 2018) %>%
+  # alleen de kolommen year, name + de pollutants behouden
+  select(year, name, all_of(vars)) %>%
+  pivot_longer(
+    cols      = all_of(vars),
+    names_to  = "variable",
+    values_to = "value"
+  ) %>%
+  group_by(name, variable) %>%
+  summarise(
+    n_missing    = sum(is.na(value)),
+    total        = n(),
+    perc_missing = 100 * n_missing / total,
+    .groups      = "drop"
+  )
+```
+# variables with more then 99% of missing in a station
+```{r}
+vars_99plus_missing <- missing_summary_2018 %>%
+  filter(perc_missing > 99) %>%
+  distinct(variable)
+```
+
+# summary measures NO2 2018
+```{r}
+# summary statistics of NO2 for each station
+no2_stats_2018 <- merged_all_data %>%
+  filter(year == 2018) %>%
+  group_by(name) %>%
+  summarise(
+    mean_NO2 = mean(NO_2, na.rm = TRUE),
+    median_NO2 = median(NO_2, na.rm = TRUE),
+    sd_NO2 = sd(NO_2, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# boxplot of NO2 for each station
+merged_all_data %>%
+  filter(year == 2018, !is.na(NO_2)) %>%
+  ggplot(aes(x = reorder(name, NO_2, FUN = median, na.rm = TRUE), y = NO_2)) +
+  geom_boxplot(fill = "lightblue", outlier.color = "red", outlier.size = 1) +
+  labs(
+    title = "Boxplot of NO_2 per station in 2018",
+    x = "Station",
+    y = expression(NO[2] ~ (µg/m^3))
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+```
+
+
+# General summary measures
+```{r}
+library(dplyr)
+library(tidyr)
+
+# summarize data
+summary_overall <- all_data %>%   
+  select(all_of(vars)) %>%         
+  summarise(
+    across(
+      everything(),
+      list(
+        mean = ~mean(., na.rm = TRUE),
+        median = ~median(., na.rm = TRUE),
+        sd = ~sd(., na.rm = TRUE)
+      ),
+      .names = "{.col}_{.fn}"
+    )
+  )
+
+
+# pivot to longer
+summary_long <- summary_overall %>%
+  pivot_longer(
+    everything(),
+    names_to = c("variable", "stat"),
+    names_sep = "_(?=[^_]+$)",  # split on last underscore
+    values_to = "value"
+  )
+
+# check on duplicates
+duplicates <- summary_long %>%
+  summarise(count = n(), .by = c(variable, stat)) %>%
+  filter(count > 1)
+
+# back to wider but without the duplicates
+summary_tidy <- summary_long %>%
+  pivot_wider(
+    names_from = stat,
+    values_from = value,
+    values_fn = mean  
+  )
+
+
+
+```
+# summary statistics per year
+```{r fig.width=14, fig.height=25}
+library(dplyr)
+library(tidyr)
+
+summary_per_year <- all_data %>%
+  group_by(year) %>%  
+  summarise(
+    across(
+      all_of(vars),  
+      list(
+        mean = ~mean(., na.rm = TRUE),
+        median = ~median(., na.rm = TRUE),
+        sd = ~sd(., na.rm = TRUE)
+      ),
+      .names = "{.col}_{.fn}"
+    )
+  ) %>%
+  ungroup()
+
+
+# include year in the output
+summary_long_per_year <- summary_per_year %>%
+  pivot_longer(
+    cols = -year,
+    names_to = c("variable", "stat"),
+    names_sep = "_(?=[^_]+$)",
+    values_to = "value"
+  )
+
+
+```
+# scatter plots
+```{r}
+library(tidyverse)
+
+# pollutants
+vars <- c("BEN", "CO", "EBE", "NO", "NOx", "NO_2", "O_3", "PM10", "PM25", "SO_2", "TCH", "TOL", "PXY", "MXY", "NMHC", "OXY", "CH4")
+
+long_data_year <- all_data %>%
+  select(year, all_of(vars)) %>%
+  pivot_longer(cols = -year, names_to = "variable", values_to = "value")
+
+# Plot each variable against year
+ggplot(long_data_year, aes(x = year, y = value)) +
+  stat_summary(fun = mean, geom = "line") +       # line with average per year
+  stat_summary(fun.data = mean_se, geom = "ribbon", alpha = 0.2) +
+  facet_wrap(~variable, scales = "free_y", ncol = 4) +
+  theme_minimal() + theme(axis.text.x = element_text(angle = 60, hjust = 1, vjust = 1)) + theme(axis.text.y = element_text(size = 4)) +
+  labs(title = "Trends of pollutants over years",
+       y = "Mean concentration",
+       x = "Year")
+
+```
+
+
+```{r fig.width=14, fig.height=25}
+
+long_data_station <- merged_all_data %>%
+  select(name, all_of(vars)) %>%
+  pivot_longer(cols = -name, names_to = "variable", values_to = "value")
+
+# Plotting: boxplot per station per variable
+ggplot(long_data_station, aes(x = factor(name), y = value)) +
+  geom_boxplot(outlier.size = 0.5) +
+  facet_wrap(~variable, scales = "free_y", ncol = 2) +
+  theme_minimal() +
+  labs(title = "Pollutant concentrations per station",
+       y = "Concentration",
+       x = "Station") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) + theme(axis.text.y = element_text(size = 10)) + theme(axis.text.x = element_text(size = 10))
+
+```
+
+
+# trend over time for each pollutant
+```{r}
+all_data %>%
+  group_by(year) %>%
+  summarise(across(c(BEN, CO, EBE, NO, NOx, NO_2, O_3, PM10, PM25, SO_2, TCH, TOL, PXY, MXY, NMHC, OXY, CH4), mean, na.rm = TRUE)) %>%
+  pivot_longer(-year, names_to = "pollutant", values_to = "mean_value") %>%
+  ggplot(aes(x = year, y = mean_value, color = pollutant)) +
+  geom_line() +
+  theme_minimal() +
+  labs(title = "Average pollutant levels per year") + 
+  ylab("Mean pollutant level")
+
+
+```
+# correlations
+```{r}
+# Select relevant numeric columns
+num_vars <- all_data %>%
+  dplyr::select(BEN, CO, EBE, NO, NOx, NO_2, O_3, PM10, PM25, SO_2, TCH, TOL, PXY, MXY, NMHC, OXY, CH4)
+num_vars <- num_vars %>% rename_with(make.names)
+num_vars <- as.data.frame(num_vars)
+
+
+# Correlation matrix
+corrplot(cor(num_vars, use = "pairwise.complete.obs"), method = "color", type = "upper")
+
+```
+
+
